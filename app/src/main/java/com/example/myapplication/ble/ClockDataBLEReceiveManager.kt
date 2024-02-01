@@ -2,12 +2,15 @@ package com.example.myapplication.ble
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import com.example.myapplication.data.ClockDataReceiveManager
 import com.example.myapplication.data.ClockDataResult
+import com.example.myapplication.data.ConnectionState
 import com.example.myapplication.util.Resource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,11 +48,59 @@ class ClockDataBLEReceiveManager @Inject constructor(
                 coroutineScope.launch {
                     data.emit(Resource.Loading(message = "Connecting to device..."))
                 }
-                if (isScanning){
+                if (isScanning) {
                     result.device.connectGatt(context, false, gattCallback)
                     isScanning = false
                     bleScanner.stopScan(this)
                 }
+            }
+        }
+    }
+
+    private var currentConnectionAttempt = 1
+    private var maximumConnectionAttempts = 5
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    coroutineScope.launch {
+                        data.emit(Resource.Loading(message = "Discovering services..."))
+                    }
+                    gatt.discoverServices()
+                    this@ClockDataBLEReceiveManager.gatt = gatt
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    coroutineScope.launch {
+                        data.emit(
+                            Resource.Success(
+                                data = ClockDataResult(
+                                    0f,
+                                    0f,
+                                    0f,
+                                    ConnectionState.Disconnected
+                                )
+                            )
+                        )
+                    }
+                    gatt.close()
+                }
+            } else {
+                gatt.close()
+                currentConnectionAttempt += 1
+                coroutineScope.launch {
+                    data.emit(Resource.Loading(message = "Attempting to connect"))
+                }
+                if (currentConnectionAttempt > maximumConnectionAttempts) {
+                    coroutineScope.launch {
+                        data.emit(Resource.Error(errorMessage = "Could not connect"))
+                    }
+                }
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            with(gatt){
+                printGattTable()
             }
         }
     }
